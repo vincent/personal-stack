@@ -1,0 +1,77 @@
+version: '2'
+
+networks:
+  default:
+    external:
+      name: "traefik-network"
+
+services:
+  traefik:
+    container_name: traefik
+    image: "traefik:latest"
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+    restart: always
+    ports:
+     - 80:80
+     - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/traefik/traefik.toml:/traefik.toml:ro
+      - /opt/traefik/acme.json:/acme.json
+
+  portainer:
+    image: "portainer/portainer"
+    command: -H unix:///var/run/docker.sock
+    environment:
+      - USER_UID=1100
+      - USER_GID=1100
+    restart: unless-stopped
+    ports:
+      - 8000:8000
+      - 9000:9000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/portainer/data:/data
+    labels:
+     - "traefik.frontend.rule=Host:portainer.omv"
+     - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+     - "traefik.enable=true"
+
+  gitea:
+    image: "gitea/gitea:latest"
+    environment:
+      - USER_UID=1200
+      - USER_GID=1200
+    restart: unless-stopped
+    volumes:
+      - /opt/gitea/data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - 3000:3000
+      - 222:222
+    networks:
+      - "traefik-network"
+      - "gitea"
+    labels:
+     - "traefik.frontend.rule=Host:gitea.omv"
+     - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+     - "traefik.enable=true"
+
+  heimdall:
+    image: "linuxserver/heimdall"
+    container_name: heimdall
+    environment:
+      - PUID=1300
+      - PGID=1300
+    volumes:
+      - /opt/heimdall/config:/config
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    labels:
+     - "traefik.frontend.rule=Host:gitea.omv"
+     - "traefik.http.services.heimdall.loadbalancer.server.port=80"
+     - "traefik.enable=true"
