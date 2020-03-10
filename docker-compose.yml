@@ -72,6 +72,6 @@ services:
       - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
     labels:
-     - "traefik.frontend.rule=Host:gitea.omv"
+     - "traefik.frontend.rule=Host:heimdall.omv"
      - "traefik.http.services.heimdall.loadbalancer.server.port=80"
      - "traefik.enable=true"
