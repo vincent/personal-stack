@@ -1,76 +1,206 @@
 version: '2'
 
+networks:
+  proxy:
+    external:
+      name: traefik_proxy
+
 services:
   traefik:
+    image: "traefik:v2.0.0"
     container_name: traefik
-    image: "traefik:latest"
-    environment:
-      - USER_UID=1000
-      - USER_GID=1000
+    hostname: traefik
     restart: always
+    environment:
+      USER_UID: 1000
+      USER_GID: 1000
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.docker
+      - --api
+      - --providers.docker.defaultrule=Host(`/{{ .Name }}.omv`)
+      - --accesslog=true
+      - --log.level=DEBUG
+      - --log.format=clf
+      #- --certificatesresolvers.leresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      #- --certificatesresolvers.leresolver.acme.email=vincent.lark@gmail.com
+      #- --certificatesresolvers.leresolver.acme.storage=/acme.json
+      #- --certificatesresolvers.leresolver.acme.tlschallenge=true
     ports:
-     - 80:80
-     - 443:443
+      - 80:80
+      - 443:443
+    networks:
+      - proxy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/traefik/traefik.toml:/traefik.toml:ro
       - /opt/traefik/acme.json:/acme.json
+    labels:
+      # Dashboard
+      - "traefik.http.routers.traefik.rule=Host(`traefik.omv`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls=true"
+      # - "traefik.http.routers.traefik.tls.certresolver=leresolver"
+      # - "traefik.http.routers.traefik.middlewares=authtraefik"
+      # - "traefik.http.middlewares.authtraefik.basicauth.users=user:$$apr1$$q8eZFHjF$$Fvmkk//V6Btlaf2i/ju5n/" # user/password
+      
+      # global redirect to https
+      #- "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
 
+      # middleware redirect
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+  
+  postgres:
+    image: "postgres"
+    container_name: postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      - PUID=1100
+      - PGID=1100
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - PGDATA=/data/postgres
+    volumes:
+      - /opt/postgres/data:/data/postgres
+    networks:
+      - postgres
+  
+  pgadmin:
+    image: "dpage/pgadmin4"
+    container_name: pgadmin
+    hostname: pgadmin
+    restart: unless-stopped
+    environment:
+      - PUID=1101
+      - PGID=1101
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-pgadmin4@pgadmin.org}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-admin}
+    networks:
+      - postgres
+      - proxy
+    depends_on:
+     - postgres
+    volumes:
+       - /opt/postgres/.pgadmin:/root/.pgadmin
+    labels:
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.omv`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+  
+  adminer:
+    image: "adminer"
+    container_name: adminer
+    hostname: adminer
+    restart: unless-stopped
+    environment:
+      - PUID=1101
+      - PGID=1101
+      - ADMINER_DESIGN=nette
+      - ADMINER_DEFAULT_SERVER=postgres
+    networks:
+      - postgres
+      - proxy
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.http.routers.adminer.rule=Host(`dba.omv`)"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls=true"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+  
+  bitwarden:
+    image: bitwardenrs/server
+    container_name: bitwarden
+    hostname: bitwarden
+    restart: always
+    environment:
+      WEBSOCKET_ENABLED: 'true'
+      SIGNUPS_ALLOWED: 'true'
+    volumes:
+      - ./opt/bitwarden/data:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.http.routers.bitwarden.rule=Host(`bitwarden.omv`)"
+      - "traefik.http.routers.bitwarden.entrypoints=websecure"
+      - "traefik.http.routers.bitwarden.tls=true"
+      - "traefik.http.services.bitwarden.loadbalancer.server.port=80"
+  
   heimdall:
     image: "linuxserver/heimdall"
     container_name: heimdall
+    hostname: heimdall
+    restart: unless-stopped
     environment:
-      - PUID=1300
-      - PGID=1300
-    ports:
-     - 1380:80
-     - 13443:443
+      PUID: 1500
+      PGID: 1500
+    networks:
+      - proxy
     volumes:
       - /opt/heimdall/config:/config
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
-    restart: unless-stopped
     labels:
-     - "traefik.frontend.rule=Host:heimdall.omv"
-     - "traefik.http.services.heimdall.loadbalancer.server.port=1380"
-     - "traefik.enable=true"
-
-  portainer:
-    image: "portainer/portainer"
-    command: -H unix:///var/run/docker.sock
-    environment:
-      - USER_UID=1100
-      - USER_GID=1100
-    restart: unless-stopped
-    ports:
-      - 8000:8000
-      - 9000:9000
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/portainer/data:/data
-    labels:
-     - "traefik.frontend.rule=Host:portainer.omv"
-     - "traefik.http.services.portainer.loadbalancer.server.port=9000"
-     - "traefik.enable=true"
+      - "traefik.http.routers.heimdall.rule=Host(`heimdall.omv`)"
+      - "traefik.http.routers.heimdall.entrypoints=websecure"
+      - "traefik.http.routers.heimdall.tls=true"
+      - "traefik.http.services.heimdall.loadbalancer.server.port=80"
+      #- "traefik.http.routers.heimdall.middlewares=auth"
+      #- "traefik.http.routers.heimdall.tls.certresolver=leresolver"
 
   gitea:
     image: "gitea/gitea:latest"
+    container_name: gitea
+    hostname: gitea
     environment:
-      - USER_UID=1200
-      - USER_GID=1200
+      - USER_UID=1700
+      - USER_GID=1700
+      - ROOT_URL=gitea.omv
+      - RUN_MODE=prod
+      - DISABLE_SSH=true
+      - INSTALL_LOCK=true
+      - SECRET_KEY=${GITEA_SECRET_KEY:-AZERTYUIOP}
+      - DISABLE_REGISTRATION=false
+      - REQUIRE_SIGNIN_VIEW=false
     restart: unless-stopped
     volumes:
       - /opt/gitea/data:/data
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
-    ports:
-      - 3000:3000
-      - 222:22
     networks:
-      - "traefik-network"
-      - "gitea"
+      - proxy
     labels:
-     - "traefik.frontend.rule=Host:gitea.omv"
-     - "traefik.http.services.gitea.loadbalancer.server.port=3000"
-     - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`gitea.omv`)"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
+      - "traefik.http.routers.gitea.tls=true"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+      #- "traefik.http.routers.gitea.middlewares=auth"
+      #- "traefik.http.routers.gitea.tls.certresolver=leresolver"
+     
+  huginn:
+    image: "huginn/huginn"
+    container_name: huginn
+    hostname: huginn
+    restart: unless-stopped
+    environment:
+      PUID: 1900
+      PGID: 1900
+      TIMEZONE: "Paris"
+    networks:
+      - proxy
+    volumes:
+      - /opt/huginn/config:/config
+      - /opt/huginn/mysql-data:/var/lib/mysql
+    labels:
+      - "traefik.http.routers.huginn.rule=Host(`huginn.omv`)"
+      - "traefik.http.routers.huginn.entrypoints=websecure"
+      - "traefik.http.routers.huginn.tls=true"
+      - "traefik.http.services.huginn.loadbalancer.server.port=3000"
+      #- "traefik.http.routers.huginn.middlewares=auth"
+      #- "traefik.http.routers.huginn.tls.certresolver=leresolver"
 
