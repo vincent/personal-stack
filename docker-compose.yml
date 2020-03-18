@@ -4,6 +4,9 @@ networks:
   proxy:
     external:
       name: traefik_proxy
+  vlan:
+    external:
+      name: vlan
 
 services:
   traefik:
@@ -19,14 +22,16 @@ services:
       - --entrypoints.websecure.address=:443
       - --providers.docker
       - --api
-      - --providers.docker.defaultrule=Host(`/{{ .Name }}.omv`)
+      - --api.insecure=true
+      - --providers.docker.exposedbydefault=false
       - --accesslog=true
       - --log.level=DEBUG
       - --log.format=clf
-      #- --certificatesresolvers.leresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
-      #- --certificatesresolvers.leresolver.acme.email=vincent.lark@gmail.com
-      #- --certificatesresolvers.leresolver.acme.storage=/acme.json
-      #- --certificatesresolvers.leresolver.acme.tlschallenge=true
+      - --providers.file.filename=/servers.toml
+      - --certificatesresolvers.leresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory
+      - --certificatesresolvers.leresolver.acme.email=vincent.lark@gmail.com
+      - --certificatesresolvers.leresolver.acme.storage=/acme.json
+      - --certificatesresolvers.leresolver.acme.tlschallenge=true
     ports:
       - 80:80
       - 443:443
@@ -35,24 +40,68 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/traefik/acme.json:/acme.json
+      - /opt/traefik/servers.toml:/servers.toml
+
     labels:
       # Dashboard
-      - "traefik.http.routers.traefik.rule=Host(`traefik.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.tat.wine`)"
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.tls=true"
-      # - "traefik.http.routers.traefik.tls.certresolver=leresolver"
+      - "traefik.http.routers.traefik.tls.certresolver=leresolver"
       # - "traefik.http.routers.traefik.middlewares=authtraefik"
       # - "traefik.http.middlewares.authtraefik.basicauth.users=user:$$apr1$$q8eZFHjF$$Fvmkk//V6Btlaf2i/ju5n/" # user/password
-      
+
+  
       # global redirect to https
-      #- "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
       - "traefik.http.routers.http-catchall.entrypoints=web"
       - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
 
       # middleware redirect
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      
+      # extenal services routing
+      # octopi
+      - "traefik.http.routers.octopi.entrypoints=websecure"
+      - "traefik.http.routers.octopi.rule=Host(`octopi.tat.wine`)"
+      - "traefik.http.routers.octopi.service=octopi@file"
+      - "traefik.http.routers.octopi.tls=true"
+      - "traefik.http.routers.octopi.tls.certresolver=leresolver"
+      # open-media-vault
+      - "traefik.http.routers.omv.entrypoints=websecure"
+      - "traefik.http.routers.omv.rule=Host(`omv.tat.wine`)"
+      - "traefik.http.routers.omv.service=omv@file"
+      - "traefik.http.routers.omv.tls=true"
+      - "traefik.http.routers.omv.tls.certresolver=leresolver"
   
+  static:
+    image: flashspys/nginx-static
+    container_name: nginx-static
+    hostname: nginx-static
+    restart: unless-stopped
+    volumes: 
+      - /opt/static:/static
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.static.rule=Host(`tat.wine`)"
+      - "traefik.http.routers.static.entrypoints=websecure"
+      - "traefik.http.routers.static.tls=true"
+      - "traefik.http.services.static.loadbalancer.server.port=80"
+      - "traefik.http.routers.static.tls.certresolver=leresolver"
+      # default errors
+      - "traefik.http.middlewares.test-errorpage.errors.status=0-999"
+      - "traefik.http.middlewares.test-errorpage.errors.service=serviceError"
+      - "traefik.http.middlewares.test-errorpage.errors.query=/index.html"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+      
   postgres:
     image: "postgres"
     container_name: postgres
@@ -68,7 +117,7 @@ services:
       - /opt/postgres/data:/data/postgres
     networks:
       - postgres
-  
+
   pgadmin:
     image: "dpage/pgadmin4"
     container_name: pgadmin
@@ -87,10 +136,17 @@ services:
     volumes:
        - /opt/postgres/.pgadmin:/root/.pgadmin
     labels:
-      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.tat.wine`)"
       - "traefik.http.routers.pgadmin.entrypoints=websecure"
       - "traefik.http.routers.pgadmin.tls=true"
       - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+      - "traefik.http.routers.pgadmin.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
   
   adminer:
     image: "adminer"
@@ -108,10 +164,17 @@ services:
     depends_on:
       - postgres
     labels:
-      - "traefik.http.routers.adminer.rule=Host(`dba.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`dba.tat.wine`)"
       - "traefik.http.routers.adminer.entrypoints=websecure"
       - "traefik.http.routers.adminer.tls=true"
       - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+      - "traefik.http.routers.adminer.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
   
   bitwarden:
     image: bitwardenrs/server
@@ -126,11 +189,18 @@ services:
     networks:
       - proxy
     labels:
-      - "traefik.http.routers.bitwarden.rule=Host(`bitwarden.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.bitwarden.rule=Host(`bitwarden.tat.wine`)"
       - "traefik.http.routers.bitwarden.entrypoints=websecure"
       - "traefik.http.routers.bitwarden.tls=true"
       - "traefik.http.services.bitwarden.loadbalancer.server.port=80"
-  
+      - "traefik.http.routers.bitwarden.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+    
   heimdall:
     image: "linuxserver/heimdall"
     container_name: heimdall
@@ -146,13 +216,18 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     labels:
-      - "traefik.http.routers.heimdall.rule=Host(`heimdall.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.heimdall.rule=Host(`heimdall.tat.wine`) || Host(`go.tat.wine`)"
       - "traefik.http.routers.heimdall.entrypoints=websecure"
       - "traefik.http.routers.heimdall.tls=true"
       - "traefik.http.services.heimdall.loadbalancer.server.port=80"
-      #- "traefik.http.routers.heimdall.middlewares=auth"
-      #- "traefik.http.routers.heimdall.tls.certresolver=leresolver"
-
+      - "traefik.http.routers.heimdall.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
   gitea:
     image: "gitea/gitea:latest"
     container_name: gitea
@@ -160,7 +235,7 @@ services:
     environment:
       - USER_UID=1700
       - USER_GID=1700
-      - ROOT_URL=gitea.omv
+      - ROOT_URL=gitea.tat.wine
       - RUN_MODE=prod
       - DISABLE_SSH=true
       - INSTALL_LOCK=true
@@ -175,13 +250,18 @@ services:
     networks:
       - proxy
     labels:
-      - "traefik.http.routers.gitea.rule=Host(`gitea.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`git.tat.wine`)"
       - "traefik.http.routers.gitea.entrypoints=websecure"
       - "traefik.http.routers.gitea.tls=true"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
-      #- "traefik.http.routers.gitea.middlewares=auth"
-      #- "traefik.http.routers.gitea.tls.certresolver=leresolver"
-     
+      - "traefik.http.routers.gitea.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
   huginn:
     image: "huginn/huginn"
     container_name: huginn
@@ -197,10 +277,157 @@ services:
       - /opt/huginn/config:/config
       - /opt/huginn/mysql-data:/var/lib/mysql
     labels:
-      - "traefik.http.routers.huginn.rule=Host(`huginn.omv`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.huginn.rule=Host(`huginn.tat.wine`)"
       - "traefik.http.routers.huginn.entrypoints=websecure"
       - "traefik.http.routers.huginn.tls=true"
       - "traefik.http.services.huginn.loadbalancer.server.port=3000"
-      #- "traefik.http.routers.huginn.middlewares=auth"
-      #- "traefik.http.routers.huginn.tls.certresolver=leresolver"
-
+      - "traefik.http.routers.huginn.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
+  transmission:
+    image: linuxserver/transmission
+    container_name: transmission
+    hostname: transmission
+    restart: unless-stopped
+    environment:
+      - PUID=2000
+      - PGID=2000
+      - TZ=Europe/Paris
+      - USER=admin
+      - PASS=admin
+    volumes:
+      - /opt/transmission/config:/config
+      - /home/transmission/downloads:/downloads
+      - /home/transmission/watch:/watch
+    networks:
+      - proxy
+    ports:
+      - 51413:51413
+      - 51413:51413/udp
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.transmission.rule=Host(`torrents.tat.wine`)"
+      - "traefik.http.routers.transmission.entrypoints=websecure"
+      - "traefik.http.routers.transmission.tls=true"
+      - "traefik.http.services.transmission.loadbalancer.server.port=9091"
+      - "traefik.http.routers.transmission.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
+  shiori:
+    image: radhifadlillah/shiori
+    container_name: shiori
+    hostname: shiori
+    restart: unless-stopped
+    environment:
+      - PUID=2100
+      - PGID=2100
+    volumes:
+      - /opt/shiori/config:$HOME/.local/share/shiori
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.shiori.rule=Host(`bookmarks.tat.wine`)"
+      - "traefik.http.routers.shiori.entrypoints=websecure"
+      - "traefik.http.routers.shiori.tls=true"
+      - "traefik.http.services.shiori.loadbalancer.server.port=8080"
+      - "traefik.http.routers.shiori.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
+  airsonic:
+    image: airsonic/airsonic
+    container_name: airsonic
+    hostname: airsonic
+    restart: unless-stopped
+    environment:
+      - PUID=2200
+      - PGID=2200
+    volumes:
+      - /home/airsonic/data:/airsonic/data
+      - /home/music:/airsonic/music
+      - /home/playlists:/airsonic/playlists
+      - /home/podcasts:/airsonic/podcasts
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.airsonic.rule=Host(`sonic.tat.wine`)"
+      - "traefik.http.routers.airsonic.entrypoints=websecure"
+      - "traefik.http.routers.airsonic.tls=true"
+      - "traefik.http.services.airsonic.loadbalancer.server.port=4040"
+      - "traefik.http.routers.airsonic.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
+  home-assistant:
+    image: homeassistant/home-assistant
+    container_name: home-assistant
+    hostname: homeassistant
+    restart: unless-stopped
+    networks:
+      - proxy
+      - vlan
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /opt/home-assistant/config:/config
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hass.rule=Host(`hass.tat.wine`)"
+      - "traefik.http.routers.hass.entrypoints=websecure"
+      - "traefik.http.routers.hass.tls=true"
+      - "traefik.http.routers.hass.service=hass"
+      - "traefik.http.services.hass.loadbalancer.server.port=8123"
+      - "traefik.http.routers.hass.tls.certresolver=leresolver"
+      # a local interface for TTS to Kodi
+      - "traefik.http.routers.hasslocal.rule=Host(`hasslocal.tat.wine`)"
+      - "traefik.http.routers.hasslocal.entrypoints=web"
+      - "traefik.http.routers.hasslocal.tls=false"
+      - "traefik.http.routers.hasslocal.service=hasslocal"
+      - "traefik.http.services.hasslocal.loadbalancer.server.port=8123"
+  
+  nextcloud:
+    image: nextcloud
+    container_name: nextcloud
+    hostname: nextcloud
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=nextcloudapp
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+    networks:
+      - proxy
+      - postgres
+    links:
+      - postgres
+    volumes:
+      - nextcloud:/var/www/html
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cloud.rule=Host(`cloud.tat.wine`)"
+      - "traefik.http.routers.cloud.entrypoints=websecure"
+      - "traefik.http.routers.cloud.tls=true"
+      - "traefik.http.routers.cloud.service=hass"
+      - "traefik.http.services.cloud.loadbalancer.server.port=8123"
+      - "traefik.http.routers.cloud.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
