@@ -102,6 +102,14 @@ services:
       - "traefik.http.routers.https-redirect.middlewares=https-redirect"
       - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
       
+  redis:
+    image: redis
+    container_name: redis
+    hostname: redis
+    restart: unless-stopped
+    networks:
+      - redis
+ 
   postgres:
     image: "postgres"
     container_name: postgres
@@ -380,6 +388,9 @@ services:
     container_name: home-assistant
     hostname: homeassistant
     restart: unless-stopped
+    ports:
+      - 56700:56700
+      - 56700:56700/udp
     networks:
       - proxy
       - vlan
@@ -402,32 +413,59 @@ services:
       - "traefik.http.services.hasslocal.loadbalancer.server.port=8123"
   
   nextcloud:
-    image: nextcloud
+    image: nextcloud:latest
     container_name: nextcloud
     hostname: nextcloud
     restart: unless-stopped
     environment:
+      - VIRTUAL_HOST=cloud.tat.wine
       - POSTGRES_HOST=postgres
-      - POSTGRES_DB=nextcloudapp
+      - POSTGRES_DB=nextcloudappre
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_DEFAULT_ADMIN_USER:-admin}
+      - NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_DEFAULT_ADMIN_PASSWORD:-changeme}
+      - SMTP_HOST=${SMTP_HOST:-smtp.openxchange.eu}
+      - SMTP_SECURE=ssl
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_NAME=${SERVICE_SMTP_USERNAME:-mail@example.com}
+      - SMTP_PASSWORD=${SERVICE_SMTP_PASSWORD:-changeme}
+      - MAIL_FROM_ADDRESS=${SERVICE_MAIL_FROM_ADDRESS:-mail@example.com}
+      - MAIL_DOMAIN=${SERVICE_MAIL_DOMAIN:-example.com}
+      - REDIS_HOST=redis
     networks:
       - proxy
       - postgres
+      - redis
     links:
       - postgres
     volumes:
-      - nextcloud:/var/www/html
+      #- nextcloud:/var/www/html:cached
+      - /opt/nextcloud/data:/var/www/html
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.cloud.rule=Host(`cloud.tat.wine`)"
       - "traefik.http.routers.cloud.entrypoints=websecure"
       - "traefik.http.routers.cloud.tls=true"
-      - "traefik.http.routers.cloud.service=hass"
-      - "traefik.http.services.cloud.loadbalancer.server.port=8123"
+      - "traefik.http.services.cloud.loadbalancer.server.port=80"
       - "traefik.http.routers.cloud.tls.certresolver=leresolver"
-      # global redirect to https
-      - "traefik.http.routers.https-redirect.entrypoints=http"
-      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
-      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
-      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+
+  code:
+    image: codercom/code-server
+    container_name: code
+    hostname: code
+    restart: unless-stopped
+    environment:
+      - PASSWORD=${CODER_PASSWORD:-changeme}
+    networks:
+      - proxy
+    volumes:
+      - /opt/coder/data:/home/coder/project:cached
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.code.rule=Host(`code.tat.wine`)"
+      - "traefik.http.routers.code.entrypoints=websecure"
+      - "traefik.http.routers.code.tls=true"
+      - "traefik.http.services.code.loadbalancer.server.port=8080"
+      - "traefik.http.routers.code.tls.certresolver=leresolver"
+ 
