@@ -391,6 +391,8 @@ services:
     ports:
       - 56700:56700
       - 56700:56700/udp
+      # editing /var/lib/docker/containers/$CID/hostconfig.json
+      # "Sysctls":{"net.ipv4.icmp_echo_ignore_broadcasts":"0"}
     networks:
       - proxy
       - vlan
@@ -428,10 +430,10 @@ services:
       - SMTP_HOST=${SMTP_HOST:-smtp.openxchange.eu}
       - SMTP_SECURE=ssl
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_NAME=${SERVICE_SMTP_USERNAME:-mail@example.com}
-      - SMTP_PASSWORD=${SERVICE_SMTP_PASSWORD:-changeme}
-      - MAIL_FROM_ADDRESS=${SERVICE_MAIL_FROM_ADDRESS:-mail@example.com}
-      - MAIL_DOMAIN=${SERVICE_MAIL_DOMAIN:-example.com}
+      - SMTP_NAME=${SERVICE_SMTP_USERNAME:-jabba@tat.wine}
+      - SMTP_PASSWORD=${SERVICE_SMTP_PASSWORD:-cZwef4gQBGbX}
+      - MAIL_FROM_ADDRESS=${SERVICE_MAIL_FROM_ADDRESS:-jabba@tat.wine}
+      - MAIL_DOMAIN=${SERVICE_MAIL_DOMAIN:-tat.wine}
       - REDIS_HOST=redis
     networks:
       - proxy
