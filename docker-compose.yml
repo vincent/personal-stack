@@ -50,9 +50,7 @@ services:
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.tls=true"
       - "traefik.http.routers.traefik.tls.certresolver=leresolver"
-      # - "traefik.http.routers.traefik.middlewares=authtraefik"
-      # - "traefik.http.middlewares.authtraefik.basicauth.users=user:$$apr1$$q8eZFHjF$$Fvmkk//V6Btlaf2i/ju5n/" # user/password
-
+      - "traefik.http.routers.traefik.middlewares=keycloak"
   
       # global redirect to https
       - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
@@ -69,13 +67,22 @@ services:
       - "traefik.http.routers.octopi.service=octopi@file"
       - "traefik.http.routers.octopi.tls=true"
       - "traefik.http.routers.octopi.tls.certresolver=leresolver"
+      - "traefik.http.routers.octopi.middlewares=keycloak"
       # open-media-vault
       - "traefik.http.routers.omv.entrypoints=websecure"
       - "traefik.http.routers.omv.rule=Host(`omv.tat.wine`)"
       - "traefik.http.routers.omv.service=omv@file"
       - "traefik.http.routers.omv.tls=true"
       - "traefik.http.routers.omv.tls.certresolver=leresolver"
-  
+      - "traefik.http.routers.omv.middlewares=keycloak"
+      # portainer
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.rule=Host(`docker.tat.wine`)"
+      - "traefik.http.routers.portainer.service=portainer@file"
+      - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.routers.portainer.tls.certresolver=leresolver"
+      - "traefik.http.routers.portainer.middlewares=keycloak"
+
   static:
     image: flashspys/nginx-static
     container_name: nginx-static
@@ -101,7 +108,76 @@ services:
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
       - "traefik.http.routers.https-redirect.middlewares=https-redirect"
       - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
-      
+  
+  keycloak:
+    image: jboss/keycloak:latest
+    container_name: keycloak
+    hostname: keycloak
+    restart: unless-stopped
+    environment:
+      - USER_UID=1050
+      - USER_GID=1050
+      - PROXY_ADDRESS_FORWARDING=true
+      - KEYCLOAK_USER=${KEYCLOAK_USER:-admin}
+      - KEYCLOAK_PASSWORD=${KEYCLOAK_PASSWORD:-changeme}
+      #- KEYCLOAK_CLIENT_IDS=security-admin-console,myapp1,myapp2
+      #- KEYCLOAK_CLIENT_WEB_ORIGINS="*"
+      #- KEYCLOAK_CLIENT_REDIRECT_URIS="*"
+      - KEYCLOAK_REALM_ROLES=ROLE_USER,ROLE_ADMIN
+      - KEYCLOAK_USER_ROLES=ROLE_USER,ROLE_ADMIN
+    networks:
+      - proxy
+    volumes:
+       - /etc/localtime:/etc/localtime:ro
+       - /opt/keycloak/data:/opt/jboss/keycloak/standalone/data
+    command: ["-b", "0.0.0.0", "-Dkeycloak.migration.strategy=IGNORE_EXISTING -Dkeycloak.profile.feature.docker=enabled"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak.rule=Host(`sso.tat.wine`)"
+      - "traefik.http.routers.keycloak.entrypoints=websecure"
+      - "traefik.http.routers.keycloak.tls=true"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      #- "traefik.http.services.keycloak.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.keycloak.tls.certresolver=leresolver"
+      # global redirect to https
+      - "traefik.http.routers.https-redirect.entrypoints=http"
+      - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
+      - "traefik.http.routers.https-redirect.middlewares=https-redirect"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+  
+  gatekeeper:
+    image: mesosphere/traefik-forward-auth:1.0.4
+    container_name: gatekeeper
+    hostname: gatekeeper
+    restart: unless-stopped
+    environment:
+      SECRET: ${AUTH_GATE_SECRET:-meowmeow}
+      PROVIDER_URI: https://sso.tat.wine/auth/realms/master
+      CLIENT_ID: 'auth-redirect'
+      CLIENT_SECRET: ${AUTH_GATE_SECRET:-changeme}
+      # We are in `Auth Host` mode.
+      # This instance will be available at auth.localhost:
+      AUTH_HOST: sso-gate.tat.wine
+      COOKIE_DOMAIN: tat.wine
+      LOG_LEVEL: debug
+      CSRF_COOKIE_NAME: '_forward_auth_csrf'
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gatekeeper.rule=Host(`sso-gate.tat.wine`)"
+      - "traefik.http.routers.gatekeeper.entrypoints=websecure"
+      - "traefik.http.routers.gatekeeper.tls=true"
+      - "traefik.http.services.gatekeeper.loadbalancer.server.port=4181"
+      #- "traefik.http.services.gatekeeper.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.gatekeeper.tls.certresolver=leresolver"
+      - "traefik.http.routers.gatekeeper.middlewares=keycloak"
+      # the keycloak middleware is registered here:
+      # (note: it uses a route to this service that DOES NOT use the forward-auth middleware)
+      - "traefik.http.middlewares.keycloak.forwardAuth.address=http://gatekeeper:4181"
+      - "traefik.http.middlewares.keycloak.forwardAuth.trustForwardHeader=true"
+      - "traefik.http.middlewares.keycloak.forwardAuth.authResponseHeaders=X-Forwarded-User"
+
   redis:
     image: redis
     container_name: redis
@@ -150,6 +226,7 @@ services:
       - "traefik.http.routers.pgadmin.tls=true"
       - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
       - "traefik.http.routers.pgadmin.tls.certresolver=leresolver"
+      - "traefik.http.routers.pgadmin.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -178,6 +255,7 @@ services:
       - "traefik.http.routers.adminer.tls=true"
       - "traefik.http.services.adminer.loadbalancer.server.port=8080"
       - "traefik.http.routers.adminer.tls.certresolver=leresolver"
+      - "traefik.http.routers.adminer.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -210,7 +288,7 @@ services:
       - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
     
   heimdall:
-    image: "linuxserver/heimdall"
+    image: linuxserver/heimdall
     container_name: heimdall
     hostname: heimdall
     restart: unless-stopped
@@ -230,6 +308,7 @@ services:
       - "traefik.http.routers.heimdall.tls=true"
       - "traefik.http.services.heimdall.loadbalancer.server.port=80"
       - "traefik.http.routers.heimdall.tls.certresolver=leresolver"
+      - "traefik.http.routers.heimdall.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -264,6 +343,7 @@ services:
       - "traefik.http.routers.gitea.tls=true"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
       - "traefik.http.routers.gitea.tls.certresolver=leresolver"
+      - "traefik.http.routers.gitea.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -291,6 +371,7 @@ services:
       - "traefik.http.routers.huginn.tls=true"
       - "traefik.http.services.huginn.loadbalancer.server.port=3000"
       - "traefik.http.routers.huginn.tls.certresolver=leresolver"
+      - "traefik.http.routers.huginn.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -324,6 +405,7 @@ services:
       - "traefik.http.routers.transmission.tls=true"
       - "traefik.http.services.transmission.loadbalancer.server.port=9091"
       - "traefik.http.routers.transmission.tls.certresolver=leresolver"
+      - "traefik.http.routers.transmission.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -349,6 +431,7 @@ services:
       - "traefik.http.routers.shiori.tls=true"
       - "traefik.http.services.shiori.loadbalancer.server.port=8080"
       - "traefik.http.routers.shiori.tls.certresolver=leresolver"
+      - "traefik.http.routers.shiori.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -377,6 +460,7 @@ services:
       - "traefik.http.routers.airsonic.tls=true"
       - "traefik.http.services.airsonic.loadbalancer.server.port=4040"
       - "traefik.http.routers.airsonic.tls.certresolver=leresolver"
+      - "traefik.http.routers.airsonic.middlewares=keycloak"
       # global redirect to https
       - "traefik.http.routers.https-redirect.entrypoints=http"
       - "traefik.http.routers.https-redirect.rule=HostRegexp(`{any:.*}`)"
@@ -391,8 +475,6 @@ services:
     ports:
       - 56700:56700
       - 56700:56700/udp
-      # editing /var/lib/docker/containers/$CID/hostconfig.json
-      # "Sysctls":{"net.ipv4.icmp_echo_ignore_broadcasts":"0"}
     networks:
       - proxy
       - vlan
@@ -407,12 +489,14 @@ services:
       - "traefik.http.routers.hass.service=hass"
       - "traefik.http.services.hass.loadbalancer.server.port=8123"
       - "traefik.http.routers.hass.tls.certresolver=leresolver"
+      - "traefik.http.routers.hass.middlewares=keycloak"
       # a local interface for TTS to Kodi
       - "traefik.http.routers.hasslocal.rule=Host(`hasslocal.tat.wine`)"
       - "traefik.http.routers.hasslocal.entrypoints=web"
       - "traefik.http.routers.hasslocal.tls=false"
       - "traefik.http.routers.hasslocal.service=hasslocal"
       - "traefik.http.services.hasslocal.loadbalancer.server.port=8123"
+      - "traefik.http.routers.hasslocal.middlewares=keycloak"
   
   nextcloud:
     image: nextcloud:latest
@@ -451,6 +535,7 @@ services:
       - "traefik.http.routers.cloud.tls=true"
       - "traefik.http.services.cloud.loadbalancer.server.port=80"
       - "traefik.http.routers.cloud.tls.certresolver=leresolver"
+      #- "traefik.http.routers.code.middlewares=keycloak"
 
   code:
     image: codercom/code-server
@@ -470,4 +555,5 @@ services:
       - "traefik.http.routers.code.tls=true"
       - "traefik.http.services.code.loadbalancer.server.port=8080"
       - "traefik.http.routers.code.tls.certresolver=leresolver"
+      - "traefik.http.routers.code.middlewares=keycloak"
  
